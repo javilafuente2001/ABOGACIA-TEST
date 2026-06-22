@@ -18,12 +18,18 @@ except Exception:  # pragma: no cover
     OpenAI = None
 
 try:
+    from google import genai
+except Exception:  # pragma: no cover
+    genai = None
+
+try:
     import openpyxl
 except Exception:  # pragma: no cover
     openpyxl = None
 
-APP_VERSION = "2.0-render"
+APP_VERSION = "2.1-gemini"
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 app = FastAPI(title="Abogacía Test", version=APP_VERSION)
 
@@ -343,12 +349,17 @@ def index():
 
 @app.get("/api/health")
 def health():
+    has_gemini_key = bool(os.getenv("GEMINI_API_KEY"))
     has_openai_key = bool(os.getenv("OPENAI_API_KEY"))
+    ai_provider = "gemini" if has_gemini_key else ("openai" if has_openai_key else None)
     return {
         "ok": True,
         "version": APP_VERSION,
         "pymupdf": fitz.__doc__.splitlines()[0] if getattr(fitz, "__doc__", None) else "PyMuPDF OK",
-        "openai_configured": has_openai_key,
+        "ai_configured": bool(ai_provider),
+        "ai_provider": ai_provider,
+        # Compatibilidad con el JavaScript anterior
+        "openai_configured": bool(ai_provider),
     }
 
 
@@ -380,11 +391,14 @@ async def import_excel(file: UploadFile = File(...)):
 
 @app.post("/api/explain")
 async def explain(req: ExplainRequest):
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="La IA no está configurada. Añade OPENAI_API_KEY en Render > Environment.")
-    if OpenAI is None:
-        raise HTTPException(status_code=500, detail="El paquete openai no está instalado")
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+
+    if not gemini_key and not openai_key:
+        raise HTTPException(
+            status_code=400,
+            detail="La IA no está configurada. Añade GEMINI_API_KEY en Render > Environment. Opcionalmente también puedes usar OPENAI_API_KEY.",
+        )
 
     option_map = {opt.get("key", "").lower(): opt.get("text", "") for opt in req.options}
     selected_text = option_map.get((req.selected or "").lower(), "Sin respuesta")
@@ -399,17 +413,34 @@ async def explain(req: ExplainRequest):
     }
 
     system_msg = "Eres preparador del examen de acceso a la abogacía en España. Explica de forma breve, clara y práctica por qué la opción correcta lo es y por qué la marcada no lo es. No inventes artículos concretos si no estás seguro. Máximo 130 palabras."
+    user_msg = json.dumps(user_payload, ensure_ascii=False)
+
+    # Prioridad: Gemini si existe GEMINI_API_KEY. Si no, usa OpenAI como alternativa.
+    if gemini_key:
+        if genai is None:
+            raise HTTPException(status_code=500, detail="El paquete google-genai no está instalado")
+        try:
+            client = genai.Client(api_key=gemini_key)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=f"{system_msg}\n\nDatos de la pregunta en JSON:\n{user_msg}",
+            )
+            text = (getattr(response, "text", "") or "").strip()
+            return {"ok": True, "provider": "gemini", "explanation": text or "No se ha podido generar una explicación."}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Error al llamar a Gemini: {exc}") from exc
+
+    if OpenAI is None:
+        raise HTTPException(status_code=500, detail="El paquete openai no está instalado")
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=openai_key)
 
-        # Preferimos Responses API cuando el SDK instalado la soporta.
-        # Si Render mantiene una versión anterior del paquete openai, usamos Chat Completions como compatibilidad.
         if hasattr(client, "responses"):
             response = client.responses.create(
                 model=OPENAI_MODEL,
                 instructions=system_msg,
-                input=json.dumps(user_payload, ensure_ascii=False),
+                input=user_msg,
             )
             text = getattr(response, "output_text", "").strip()
         else:
@@ -417,12 +448,12 @@ async def explain(req: ExplainRequest):
                 model=OPENAI_MODEL,
                 messages=[
                     {"role": "system", "content": system_msg},
-                    {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+                    {"role": "user", "content": user_msg},
                 ],
                 temperature=0.2,
             )
             text = (response.choices[0].message.content or "").strip()
 
-        return {"ok": True, "explanation": text or "No se ha podido generar una explicación."}
+        return {"ok": True, "provider": "openai", "explanation": text or "No se ha podido generar una explicación."}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error al llamar a OpenAI: {exc}") from exc

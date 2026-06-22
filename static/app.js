@@ -90,8 +90,9 @@ async function checkServer() {
     const data = await res.json();
     const el = $("serverStatus");
     el.classList.remove("bad", "warn", "ok");
-    if (data.openai_configured) {
-      el.textContent = "Servidor OK · IA activa";
+    if (data.ai_configured || data.openai_configured) {
+      const provider = data.ai_provider === "gemini" ? "Gemini" : data.ai_provider === "openai" ? "OpenAI" : "IA";
+      el.textContent = `Servidor OK · IA activa (${provider})`;
       el.classList.add("ok");
     } else {
       el.textContent = "Servidor OK · IA pendiente";

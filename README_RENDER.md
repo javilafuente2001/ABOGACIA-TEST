@@ -183,3 +183,24 @@ La app guarda los exámenes en el navegador con `localStorage`. Esto significa:
 - Si cambias de ordenador o navegador, tendrás que volver a subir los PDFs, salvo que en el futuro se conecte a MySQL u otra base de datos.
 
 No se guardan PDFs completos en Render: se guardan las preguntas extraídas en el navegador.
+
+
+## Activar IA gratis con Gemini
+
+1. Entra en Google AI Studio y crea una API key.
+2. En Render > Environment añade:
+
+```text
+GEMINI_API_KEY = tu_clave_de_gemini
+GEMINI_MODEL = gemini-2.5-flash-lite
+```
+
+3. Mantén también:
+
+```text
+PYTHON_VERSION = 3.11.9
+```
+
+4. Haz `Manual Deploy > Clear build cache & deploy`.
+
+La app prioriza Gemini si existe `GEMINI_API_KEY`. Si no existe, intenta usar OpenAI con `OPENAI_API_KEY`.
