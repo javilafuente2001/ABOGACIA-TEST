@@ -398,19 +398,32 @@ async def explain(req: ExplainRequest):
         "respuesta_correcta": {"letra": req.correct, "texto": correct_text},
     }
 
+    system_msg = "Eres preparador del examen de acceso a la abogacía en España. Explica de forma breve, clara y práctica por qué la opción correcta lo es y por qué la marcada no lo es. No inventes artículos concretos si no estás seguro. Máximo 130 palabras."
+
     try:
         client = OpenAI(api_key=api_key)
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            input=[
-                {
-                    "role": "system",
-                    "content": "Eres preparador del examen de acceso a la abogacía en España. Explica de forma breve, clara y práctica por qué la opción correcta lo es y por qué la marcada no lo es. No inventes artículos concretos si no estás seguro. Máximo 130 palabras.",
-                },
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-            ],
-        )
-        text = getattr(response, "output_text", "").strip()
+
+        # Preferimos Responses API cuando el SDK instalado la soporta.
+        # Si Render mantiene una versión anterior del paquete openai, usamos Chat Completions como compatibilidad.
+        if hasattr(client, "responses"):
+            response = client.responses.create(
+                model=OPENAI_MODEL,
+                instructions=system_msg,
+                input=json.dumps(user_payload, ensure_ascii=False),
+            )
+            text = getattr(response, "output_text", "").strip()
+        else:
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+                ],
+                temperature=0.2,
+            )
+            text = (response.choices[0].message.content or "").strip()
+
         return {"ok": True, "explanation": text or "No se ha podido generar una explicación."}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error al llamar a OpenAI: {exc}") from exc
+        
