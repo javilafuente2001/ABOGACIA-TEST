@@ -26,11 +26,15 @@
       <section id="screenConfig" class="screen active">
         <div class="hero-card">
           <div class="hero-copy">
-            <span class="eyebrow">Modo examen online</span>
-            <h1>Configura tu test y empieza a practicar.</h1>
-            <p>Sube una plantilla oficial en PDF, elige bloque y haz el examen pregunta a pregunta con contador.</p>
+            <span class="eyebrow">Biblioteca + modo examen</span>
+            <h1>Elige examen, bloque y empieza a practicar.</h1>
+            <p>Guarda tus PDFs en el navegador, practica por examen o mezcla preguntas aleatorias de todos los exámenes.</p>
           </div>
           <div class="hero-metrics">
+            <div class="metric-card">
+              <span id="metricExams">0</span>
+              <small>Exámenes</small>
+            </div>
             <div class="metric-card">
               <span id="metricGeneral">0</span>
               <small>Generales</small>
@@ -39,19 +43,19 @@
               <span id="metricAdmin">0</span>
               <small>Administrativo</small>
             </div>
-            <div class="metric-card">
-              <span id="metricReview">0</span>
-              <small>Revisar</small>
+            <div class="metric-card danger-soft">
+              <span id="metricWrong">0</span>
+              <small>Falladas</small>
             </div>
           </div>
         </div>
 
-        <div class="config-grid">
+        <div class="config-grid wide-left">
           <section class="panel upload-panel">
             <div class="panel-head">
               <div>
-                <h2>1. Cargar preguntas</h2>
-                <p>PDF oficial o Excel con columnas: pregunta, a, b, c, d, correcta.</p>
+                <h2>1. Subir y guardar examen</h2>
+                <p>PDF oficial o Excel con columnas: pregunta, a, b, c, d, correcta. Cada archivo se guarda en “Mis exámenes”.</p>
               </div>
             </div>
 
@@ -63,8 +67,8 @@
             </label>
 
             <div class="file-actions">
-              <button class="btn primary" id="btnImport" type="button">Analizar archivo</button>
-              <button class="btn ghost" id="btnLoadSaved" type="button">Usar último importado</button>
+              <button class="btn primary" id="btnImport" type="button">Analizar y guardar</button>
+              <button class="btn ghost" id="btnLoadSaved" type="button">Actualizar biblioteca</button>
             </div>
 
             <div id="importMessage" class="message hidden"></div>
@@ -73,18 +77,35 @@
           <section class="panel">
             <div class="panel-head">
               <div>
-                <h2>2. Configuración del test</h2>
-                <p>Elige bloque, tiempo y si quieres incluir reservas.</p>
+                <h2>2. Configurar test</h2>
+                <p>Elige examen concreto, falladas o modo aleatorio mezclando todos los exámenes.</p>
               </div>
             </div>
 
+            <div class="selected-box">
+              <span>Examen seleccionado</span>
+              <strong id="loadedExamName">Ninguno seleccionado.</strong>
+              <div class="chips mini" id="loadedChips"></div>
+            </div>
+
             <div class="form-row">
-              <label for="modeSelect">Bloque</label>
+              <label for="modeSelect">Tipo de test</label>
               <select id="modeSelect">
-                <option value="general">Parte general · 120 min</option>
-                <option value="administrativo">Administrativo · 60 min</option>
-                <option value="mixto">General + Administrativo · 180 min</option>
-                <option value="falladas">Repetir falladas</option>
+                <optgroup label="Examen seleccionado">
+                  <option value="general">Parte general · examen seleccionado · 120 min</option>
+                  <option value="administrativo">Administrativo · examen seleccionado · 60 min</option>
+                  <option value="mixto">General + Administrativo · examen seleccionado · 180 min</option>
+                </optgroup>
+                <optgroup label="Aleatorio con todos los exámenes">
+                  <option value="all_general">Aleatorio general · todos los exámenes · 120 min</option>
+                  <option value="all_administrativo">Aleatorio administrativo · todos los exámenes · 60 min</option>
+                  <option value="all_mixto">Aleatorio general + administrativo · todos los exámenes · 180 min</option>
+                </optgroup>
+                <optgroup label="Falladas guardadas">
+                  <option value="wrong_all">Falladas · todas</option>
+                  <option value="wrong_general">Falladas · parte general</option>
+                  <option value="wrong_administrativo">Falladas · administrativo</option>
+                </optgroup>
               </select>
             </div>
 
@@ -128,12 +149,16 @@
         <section class="panel imported-panel">
           <div class="panel-head compact">
             <div>
-              <h2>Último examen cargado</h2>
-              <p id="loadedExamName">Todavía no hay preguntas cargadas.</p>
+              <h2>Mis exámenes guardados</h2>
+              <p>Elige qué examen quieres practicar. También puedes borrar uno concreto o limpiar todas las falladas.</p>
             </div>
-            <button class="btn danger-ghost" id="btnClear" type="button">Borrar datos</button>
+            <div class="file-actions no-margin">
+              <button class="btn ghost" id="btnClearWrong" type="button">Borrar falladas</button>
+              <button class="btn danger-ghost" id="btnClear" type="button">Borrar todo</button>
+            </div>
           </div>
-          <div class="chips" id="loadedChips"></div>
+          <div id="libraryEmpty" class="empty-state">Todavía no hay exámenes guardados. Sube un PDF para empezar.</div>
+          <div class="exam-library" id="libraryList"></div>
         </section>
       </section>
 
@@ -193,7 +218,7 @@
         </div>
 
         <div class="results-actions">
-          <button class="btn start" id="btnRetryWrong" type="button">Repetir falladas</button>
+          <button class="btn start" id="btnRetryWrong" type="button">Practicar falladas</button>
           <button class="btn ghost" id="btnNewTest" type="button">Nuevo test</button>
         </div>
 
@@ -201,7 +226,7 @@
           <div class="panel-head">
             <div>
               <h2>Corrección pregunta a pregunta</h2>
-              <p>Pulsa “Explicar con IA” en las falladas cuando tengas configurada la clave.</p>
+              <p>Las preguntas falladas se guardan automáticamente. Si las aciertas en futuros test, salen de la lista de falladas.</p>
             </div>
           </div>
           <div id="reviewList" class="review-list"></div>

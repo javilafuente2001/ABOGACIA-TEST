@@ -426,4 +426,3 @@ async def explain(req: ExplainRequest):
         return {"ok": True, "explanation": text or "No se ha podido generar una explicación."}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error al llamar a OpenAI: {exc}") from exc
-        

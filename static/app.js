@@ -1,10 +1,13 @@
-const STORE_EXAM = "lexTest.exam.v2";
-const STORE_WRONG = "lexTest.wrong.v2";
-const STORE_LAST = "lexTest.lastResult.v2";
+const STORE_LIBRARY = "lexTest.library.v3";
+const STORE_SELECTED = "lexTest.selectedExam.v3";
+const STORE_WRONG = "lexTest.wrongBank.v3";
+const STORE_LAST = "lexTest.lastResult.v3";
+const LEGACY_EXAM = "lexTest.exam.v2";
 
 const $ = (id) => document.getElementById(id);
 
-let examData = null;
+let library = [];
+let selectedExamId = null;
 let session = null;
 let timerHandle = null;
 
@@ -30,6 +33,11 @@ function hideMessage(el = $("importMessage")) {
   el.classList.add("hidden");
 }
 
+function uid(prefix = "id") {
+  if (window.crypto?.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function shuffleArray(arr) {
   const copy = [...arr];
   for (let i = copy.length - 1; i > 0; i--) {
@@ -46,6 +54,15 @@ function formatTime(seconds) {
   return `${m}:${s}`;
 }
 
+function formatDate(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" });
+  } catch {
+    return "";
+  }
+}
+
 function areaLabel(area) {
   if (area === "administrativo") return "Administrativo y contencioso-administrativo";
   if (area === "general") return "Materias comunes";
@@ -56,6 +73,15 @@ function optionText(question, key) {
   if (!key) return "Sin responder";
   const opt = question.options.find((o) => o.key === key);
   return opt ? `${key.toUpperCase()}) ${opt.text}` : key.toUpperCase();
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 async function checkServer() {
@@ -78,55 +104,183 @@ async function checkServer() {
   }
 }
 
-function saveExam(data) {
-  examData = data;
-  localStorage.setItem(STORE_EXAM, JSON.stringify(data));
-  renderLoadedExam();
+function readJson(key, fallback) {
+  const raw = localStorage.getItem(key);
+  if (!raw) return fallback;
+  try { return JSON.parse(raw); } catch { return fallback; }
 }
 
-function loadSavedExam() {
-  const raw = localStorage.getItem(STORE_EXAM);
-  if (!raw) return null;
-  try {
-    examData = JSON.parse(raw);
-    renderLoadedExam();
-    return examData;
-  } catch {
-    localStorage.removeItem(STORE_EXAM);
-    return null;
+function writeJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function computeStats(questions) {
+  const valid = Array.isArray(questions) ? questions : [];
+  const by_area = {
+    general: valid.filter((q) => q.area === "general" && !q.reserve).length,
+    general_reserva: valid.filter((q) => q.area === "general" && q.reserve).length,
+    administrativo: valid.filter((q) => q.area === "administrativo" && !q.reserve).length,
+    administrativo_reserva: valid.filter((q) => q.area === "administrativo" && q.reserve).length,
+  };
+  return {
+    total: valid.length,
+    by_area,
+    needs_review: valid.filter((q) => q.needs_review || !q.correct).length,
+  };
+}
+
+function normalizeExamForStorage(data, fileName = "") {
+  if (!data || !Array.isArray(data.questions)) {
+    throw new Error("El archivo importado no tiene preguntas válidas.");
+  }
+
+  const examId = uid("exam");
+  const importedAt = new Date().toISOString();
+  const examName = data.exam_name || fileName || "Examen importado";
+
+  const questions = data.questions.map((q, index) => {
+    const sourceId = q.id || `${q.area || "area"}-${q.number || index + 1}`;
+    return {
+      ...q,
+      id: `${examId}-${sourceId}`,
+      source_id: sourceId,
+      exam_id: examId,
+      exam_name: examName,
+      number: q.number || index + 1,
+      options: Array.isArray(q.options) ? q.options : [],
+    };
+  });
+
+  return {
+    ...data,
+    exam_id: examId,
+    exam_name: examName,
+    imported_at: data.imported_at || importedAt,
+    saved_at: importedAt,
+    questions,
+    stats: computeStats(questions),
+  };
+}
+
+function loadLibrary() {
+  library = readJson(STORE_LIBRARY, []);
+  if (!Array.isArray(library)) library = [];
+
+  // Migración suave desde la versión anterior, donde solo existía un único examen guardado.
+  if (!library.length) {
+    const legacy = readJson(LEGACY_EXAM, null);
+    if (legacy?.questions?.length) {
+      try {
+        const migrated = normalizeExamForStorage(legacy, legacy.exam_name || "Examen migrado");
+        library = [migrated];
+        writeJson(STORE_LIBRARY, library);
+        localStorage.removeItem(LEGACY_EXAM);
+      } catch {
+        localStorage.removeItem(LEGACY_EXAM);
+      }
+    }
+  }
+
+  selectedExamId = localStorage.getItem(STORE_SELECTED);
+  if (!selectedExamId || !library.some((exam) => exam.exam_id === selectedExamId)) {
+    selectedExamId = library[0]?.exam_id || null;
+    if (selectedExamId) localStorage.setItem(STORE_SELECTED, selectedExamId);
   }
 }
 
-function renderLoadedExam() {
-  const name = $("loadedExamName");
-  const chips = $("loadedChips");
-  if (!examData || !Array.isArray(examData.questions)) {
-    name.textContent = "Todavía no hay preguntas cargadas.";
-    chips.innerHTML = "";
-    $("metricGeneral").textContent = "0";
-    $("metricAdmin").textContent = "0";
-    $("metricReview").textContent = "0";
+function saveLibrary() {
+  writeJson(STORE_LIBRARY, library);
+  if (selectedExamId) localStorage.setItem(STORE_SELECTED, selectedExamId);
+  else localStorage.removeItem(STORE_SELECTED);
+  renderLibrary();
+}
+
+function getSelectedExam() {
+  return library.find((exam) => exam.exam_id === selectedExamId) || null;
+}
+
+function getWrongBank() {
+  const wrong = readJson(STORE_WRONG, []);
+  return Array.isArray(wrong) ? wrong : [];
+}
+
+function saveWrongBank(items) {
+  writeJson(STORE_WRONG, items);
+}
+
+function validQuestion(q, includeReserve) {
+  if (!q || q.needs_review || !q.correct) return false;
+  if (!includeReserve && q.reserve) return false;
+  if (!Array.isArray(q.options) || q.options.length < 2) return false;
+  return true;
+}
+
+function countAllQuestions(area) {
+  return library.flatMap((exam) => exam.questions || []).filter((q) => q.area === area && !q.reserve && !q.needs_review && q.correct).length;
+}
+
+function renderLibrary() {
+  const selectedExam = getSelectedExam();
+  const allGeneral = countAllQuestions("general");
+  const allAdmin = countAllQuestions("administrativo");
+  const wrongCount = getWrongBank().length;
+
+  $("metricExams").textContent = library.length;
+  $("metricGeneral").textContent = allGeneral;
+  $("metricAdmin").textContent = allAdmin;
+  $("metricWrong").textContent = wrongCount;
+
+  const list = $("libraryList");
+  const empty = $("libraryEmpty");
+  empty.classList.toggle("hidden", library.length > 0);
+
+  if (!library.length) {
+    list.innerHTML = "";
+    $("loadedExamName").textContent = "Ninguno seleccionado.";
+    $("loadedChips").innerHTML = "";
     return;
   }
 
-  const stats = examData.stats || {};
-  const by = stats.by_area || {};
-  const general = by.general || 0;
-  const admin = by.administrativo || 0;
-  const review = stats.needs_review || 0;
+  list.innerHTML = library.map((exam) => {
+    const stats = exam.stats || computeStats(exam.questions || []);
+    const by = stats.by_area || {};
+    const selected = exam.exam_id === selectedExamId;
+    return `
+      <article class="exam-tile ${selected ? "selected" : ""}" data-exam-id="${escapeHtml(exam.exam_id)}">
+        <div class="exam-tile-top">
+          <div>
+            <h3>${escapeHtml(exam.exam_name || "Examen")}</h3>
+            <p>${formatDate(exam.saved_at || exam.imported_at) || "Guardado"}</p>
+          </div>
+          <span class="exam-badge">${stats.total || (exam.questions || []).length} preg.</span>
+        </div>
+        <div class="exam-tile-stats">
+          <span>General: <b>${by.general || 0}</b></span>
+          <span>Admin: <b>${by.administrativo || 0}</b></span>
+          <span>Reserva: <b>${(by.general_reserva || 0) + (by.administrativo_reserva || 0)}</b></span>
+          <span>Revisar: <b>${stats.needs_review || 0}</b></span>
+        </div>
+        <div class="exam-tile-actions">
+          <button class="btn ${selected ? "primary" : "ghost"} select-exam" type="button" data-exam-id="${escapeHtml(exam.exam_id)}">
+            ${selected ? "Seleccionado" : "Elegir examen"}
+          </button>
+          <button class="btn danger-ghost delete-exam" type="button" data-exam-id="${escapeHtml(exam.exam_id)}">Borrar</button>
+        </div>
+      </article>
+    `;
+  }).join("");
 
-  name.textContent = `${examData.exam_name || "Examen importado"} · ${stats.total || examData.questions.length} preguntas`;
-  $("metricGeneral").textContent = general;
-  $("metricAdmin").textContent = admin;
-  $("metricReview").textContent = review;
-
-  chips.innerHTML = [
-    `Generales: ${general}`,
-    `General reserva: ${by.general_reserva || 0}`,
-    `Administrativo: ${admin}`,
-    `Admin reserva: ${by.administrativo_reserva || 0}`,
-    `Revisar manualmente: ${review}`,
-  ].map((t) => `<span class="chip">${t}</span>`).join("");
+  if (selectedExam) {
+    const stats = selectedExam.stats || computeStats(selectedExam.questions || []);
+    const by = stats.by_area || {};
+    $("loadedExamName").textContent = selectedExam.exam_name || "Examen seleccionado";
+    $("loadedChips").innerHTML = [
+      `General: ${by.general || 0}`,
+      `Admin: ${by.administrativo || 0}`,
+      `Reservas: ${(by.general_reserva || 0) + (by.administrativo_reserva || 0)}`,
+      `Revisar: ${stats.needs_review || 0}`,
+    ].map((t) => `<span class="chip">${t}</span>`).join("");
+  }
 }
 
 async function importFile() {
@@ -138,7 +292,7 @@ async function importFile() {
   }
 
   hideMessage();
-  setMessage("Analizando archivo...", "");
+  setMessage("Analizando archivo y guardándolo en biblioteca...", "");
   $("btnImport").disabled = true;
 
   try {
@@ -157,8 +311,11 @@ async function importFile() {
       if (!res.ok) throw new Error(data.detail || "No se pudo importar el archivo.");
     }
 
-    saveExam(data);
-    setMessage(`Importado correctamente: ${data.stats?.total || data.questions.length} preguntas.`, "success");
+    const storedExam = normalizeExamForStorage(data, file.name);
+    library.unshift(storedExam);
+    selectedExamId = storedExam.exam_id;
+    saveLibrary();
+    setMessage(`Guardado correctamente: ${storedExam.exam_name} · ${storedExam.stats.total} preguntas.`, "success");
   } catch (err) {
     setMessage(err.message || "Error al analizar el archivo.", "error");
   } finally {
@@ -170,34 +327,59 @@ function getQuestionBank() {
   const mode = $("modeSelect").value;
   const includeReserve = $("includeReserve").checked;
 
-  if (mode === "falladas") {
-    const raw = localStorage.getItem(STORE_WRONG);
-    if (!raw) return [];
-    try { return JSON.parse(raw); } catch { return []; }
+  if (mode.startsWith("wrong_")) {
+    const wrong = getWrongBank().filter((q) => validQuestion(q, includeReserve));
+    if (mode === "wrong_general") return wrong.filter((q) => q.area === "general");
+    if (mode === "wrong_administrativo") return wrong.filter((q) => q.area === "administrativo");
+    return wrong;
   }
 
-  if (!examData || !Array.isArray(examData.questions)) return [];
-  return examData.questions.filter((q) => {
-    if (q.needs_review || !q.correct) return false;
-    if (!includeReserve && q.reserve) return false;
-    if (mode === "general") return q.area === "general";
-    if (mode === "administrativo") return q.area === "administrativo";
-    if (mode === "mixto") return ["general", "administrativo"].includes(q.area);
-    return true;
-  });
+  let base = [];
+  if (mode.startsWith("all_")) {
+    base = library.flatMap((exam) => exam.questions || []);
+  } else {
+    const selectedExam = getSelectedExam();
+    base = selectedExam?.questions || [];
+  }
+
+  base = base.filter((q) => validQuestion(q, includeReserve));
+
+  if (mode === "general" || mode === "all_general") return base.filter((q) => q.area === "general");
+  if (mode === "administrativo" || mode === "all_administrativo") return base.filter((q) => q.area === "administrativo");
+  if (mode === "mixto" || mode === "all_mixto") return base.filter((q) => ["general", "administrativo"].includes(q.area));
+  return base;
 }
 
 function defaultMinutes(mode) {
-  if (mode === "general") return 120;
-  if (mode === "administrativo") return 60;
-  if (mode === "mixto") return 180;
+  if (mode === "general" || mode === "all_general") return 120;
+  if (mode === "administrativo" || mode === "all_administrativo") return 60;
+  if (mode === "mixto" || mode === "all_mixto") return 180;
   return 30;
 }
 
-function startTest(fromWrong = false) {
+function modeLabel(mode) {
+  const labels = {
+    general: "General · examen seleccionado",
+    administrativo: "Administrativo · examen seleccionado",
+    mixto: "General + administrativo · examen seleccionado",
+    all_general: "Aleatorio general · todos los exámenes",
+    all_administrativo: "Aleatorio administrativo · todos los exámenes",
+    all_mixto: "Aleatorio mixto · todos los exámenes",
+    wrong_all: "Falladas · todas",
+    wrong_general: "Falladas · general",
+    wrong_administrativo: "Falladas · administrativo",
+  };
+  return labels[mode] || "Test";
+}
+
+function startTest() {
+  const mode = $("modeSelect").value;
   let bank = getQuestionBank();
   if (!bank.length) {
-    setMessage("No hay preguntas disponibles para esa configuración. Carga un PDF o cambia el bloque.", "error");
+    const msg = mode.startsWith("wrong_")
+      ? "No hay falladas guardadas para esa configuración."
+      : "No hay preguntas disponibles para esa configuración. Carga un PDF, elige otro examen o cambia el bloque.";
+    setMessage(msg, "error");
     return;
   }
 
@@ -211,9 +393,14 @@ function startTest(fromWrong = false) {
     options: shuffle ? shuffleArray(q.options) : [...q.options],
   }));
 
-  const mode = $("modeSelect").value;
   const customMinutes = parseInt($("timeInput").value, 10);
   const minutes = Number.isFinite(customMinutes) && customMinutes > 0 ? customMinutes : defaultMinutes(mode);
+  const selectedExam = getSelectedExam();
+  const examName = mode.startsWith("all_")
+    ? "Todos los exámenes"
+    : mode.startsWith("wrong_")
+      ? "Banco de falladas"
+      : selectedExam?.exam_name || "Test";
 
   session = {
     startedAt: Date.now(),
@@ -224,6 +411,8 @@ function startTest(fromWrong = false) {
     answers: {},
     finished: false,
     mode,
+    examName,
+    modeName: modeLabel(mode),
   };
 
   showScreen("test");
@@ -253,7 +442,7 @@ function renderQuestion() {
   $("currentNumber").textContent = current;
   $("totalNumber").textContent = total;
   $("answeredCount").textContent = Object.keys(session.answers).length;
-  $("questionArea").textContent = areaLabel(q.area) + (q.reserve ? " · reserva" : "");
+  $("questionArea").textContent = `${areaLabel(q.area)}${q.reserve ? " · reserva" : ""}${q.exam_name ? ` · ${q.exam_name}` : ""}`;
   $("questionText").textContent = q.question;
   $("progressPercent").textContent = `${Math.round((current / total) * 100)}%`;
   $("progressFill").style.width = `${(current / total) * 100}%`;
@@ -261,8 +450,8 @@ function renderQuestion() {
   $("btnNext").textContent = session.index === total - 1 ? "Finalizar y corregir" : "Siguiente pregunta →";
 
   $("optionsList").innerHTML = q.options.map((opt) => `
-    <button class="option-card ${selected === opt.key ? "selected" : ""}" type="button" data-key="${opt.key}">
-      <span class="option-letter">${opt.key}</span>
+    <button class="option-card ${selected === opt.key ? "selected" : ""}" type="button" data-key="${escapeHtml(opt.key)}">
+      <span class="option-letter">${escapeHtml(opt.key)}</span>
       <span class="option-text">${escapeHtml(opt.text)}</span>
     </button>
   `).join("");
@@ -275,16 +464,8 @@ function renderQuestion() {
   });
 }
 
-function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
 function nextQuestion() {
+  if (!session) return;
   const q = session.questions[session.index];
   if (!session.answers[q.id]) {
     $("questionWarning").classList.remove("hidden");
@@ -304,6 +485,26 @@ function prevQuestion() {
   renderQuestion();
 }
 
+function updateWrongBank(results) {
+  const wrongMap = new Map(getWrongBank().map((q) => [q.id, q]));
+  results.forEach((r) => {
+    const existing = wrongMap.get(r.question.id);
+    if (r.ok) {
+      // Si ya estaba en falladas y ahora se acierta, se limpia del banco.
+      if (existing) wrongMap.delete(r.question.id);
+      return;
+    }
+    wrongMap.set(r.question.id, {
+      ...r.question,
+      last_selected: r.selected,
+      last_wrong_at: new Date().toISOString(),
+      wrong_attempts: (existing?.wrong_attempts || 0) + 1,
+    });
+  });
+  const items = Array.from(wrongMap.values()).sort((a, b) => String(b.last_wrong_at || "").localeCompare(String(a.last_wrong_at || "")));
+  saveWrongBank(items);
+}
+
 function finishTest() {
   if (!session || session.finished) return;
   session.finished = true;
@@ -321,13 +522,13 @@ function finishTest() {
   const koCount = results.length - okCount - blankCount;
   const percent = results.length ? Math.round((okCount / results.length) * 100) : 0;
 
-  const wrongQuestions = results.filter((r) => !r.ok).map((r) => r.question);
-  localStorage.setItem(STORE_WRONG, JSON.stringify(wrongQuestions));
+  updateWrongBank(results);
 
   const summary = {
     finishedAt: new Date().toISOString(),
-    examName: examData?.exam_name || "Test",
+    examName: session.examName || "Test",
     mode: session.mode,
+    modeName: session.modeName,
     total: results.length,
     ok: okCount,
     ko: koCount,
@@ -337,26 +538,28 @@ function finishTest() {
   };
   localStorage.setItem(STORE_LAST, JSON.stringify(summary));
   renderResults(summary);
+  renderLibrary();
   showScreen("results");
 }
 
 function renderResults(summary) {
-  $("resultSubtitle").textContent = `${summary.examName} · ${summary.total} preguntas`;
+  $("resultSubtitle").textContent = `${summary.examName} · ${summary.modeName || "Test"} · ${summary.total} preguntas`;
   $("scoreOk").textContent = summary.ok;
   $("scoreKo").textContent = summary.ko;
   $("scoreBlank").textContent = summary.blank;
   $("scorePercent").textContent = `${summary.percent}%`;
-  $("btnRetryWrong").disabled = summary.ko + summary.blank === 0;
+  $("btnRetryWrong").disabled = getWrongBank().length === 0;
 
   const review = $("reviewList");
   review.innerHTML = summary.results.map((r) => {
     const state = r.ok ? "ok" : r.blank ? "blank" : "ko";
     const label = r.ok ? "Correcta" : r.blank ? "Sin responder" : "Fallada";
-    const explainButton = r.ok ? "" : `<button class="btn ghost explain-btn" type="button" data-id="${r.question.id}">Explicar con IA</button>`;
+    const explainButton = r.ok ? "" : `<button class="btn ghost explain-btn" type="button" data-id="${escapeHtml(r.question.id)}">Explicar con IA</button>`;
     return `
-      <article class="review-item ${state}" id="review-${r.question.id}">
+      <article class="review-item ${state}" id="review-${escapeHtml(r.question.id)}">
         <div class="review-title">${r.idx}. ${escapeHtml(r.question.question)}</div>
         <div class="review-meta">
+          <div>Examen: <strong>${escapeHtml(r.question.exam_name || summary.examName)}</strong></div>
           <div>Estado: <strong>${label}</strong></div>
           <div>Marcada: <strong>${escapeHtml(optionText(r.question, r.selected))}</strong></div>
           <div>Correcta: <strong>${escapeHtml(optionText(r.question, r.correct))}</strong></div>
@@ -375,7 +578,7 @@ function renderResults(summary) {
 async function explainQuestion(questionId, summary) {
   const result = summary.results.find((r) => r.question.id === questionId);
   if (!result) return;
-  const card = $(`review-${questionId}`);
+  const card = $("review-" + questionId);
   const box = card.querySelector(".explain-box");
   const btn = card.querySelector(".explain-btn");
   box.textContent = "Generando explicación...";
@@ -405,13 +608,35 @@ async function explainQuestion(questionId, summary) {
 }
 
 function clearAll() {
-  if (!confirm("¿Borrar los datos importados y resultados guardados?")) return;
-  localStorage.removeItem(STORE_EXAM);
+  if (!confirm("¿Borrar todos los exámenes guardados, falladas y resultados?")) return;
+  localStorage.removeItem(STORE_LIBRARY);
+  localStorage.removeItem(STORE_SELECTED);
   localStorage.removeItem(STORE_WRONG);
   localStorage.removeItem(STORE_LAST);
-  examData = null;
-  renderLoadedExam();
+  localStorage.removeItem(LEGACY_EXAM);
+  library = [];
+  selectedExamId = null;
+  renderLibrary();
   setMessage("Datos borrados.", "success");
+}
+
+function clearWrong() {
+  if (!confirm("¿Borrar todas las preguntas falladas guardadas?")) return;
+  localStorage.removeItem(STORE_WRONG);
+  renderLibrary();
+  setMessage("Banco de falladas borrado.", "success");
+}
+
+function deleteExam(examId) {
+  const exam = library.find((item) => item.exam_id === examId);
+  if (!exam) return;
+  if (!confirm(`¿Borrar el examen "${exam.exam_name}"?`)) return;
+  const questionIds = new Set((exam.questions || []).map((q) => q.id));
+  library = library.filter((item) => item.exam_id !== examId);
+  saveWrongBank(getWrongBank().filter((q) => !questionIds.has(q.id)));
+  if (selectedExamId === examId) selectedExamId = library[0]?.exam_id || null;
+  saveLibrary();
+  setMessage("Examen borrado de la biblioteca.", "success");
 }
 
 function setupDragDrop() {
@@ -436,13 +661,20 @@ function setupDragDrop() {
   });
 }
 
+function updateTimePlaceholder() {
+  const value = $("modeSelect").value;
+  $("timeInput").placeholder = String(defaultMinutes(value));
+}
+
 function bindEvents() {
   $("btnImport").addEventListener("click", importFile);
   $("btnLoadSaved").addEventListener("click", () => {
-    if (loadSavedExam()) setMessage("Último examen cargado desde el navegador.", "success");
-    else setMessage("No hay ningún examen guardado todavía.", "error");
+    loadLibrary();
+    renderLibrary();
+    setMessage("Biblioteca actualizada desde este navegador.", "success");
   });
   $("btnClear").addEventListener("click", clearAll);
+  $("btnClearWrong").addEventListener("click", clearWrong);
   $("btnStart").addEventListener("click", () => startTest());
   $("btnNext").addEventListener("click", nextQuestion);
   $("btnPrev").addEventListener("click", prevQuestion);
@@ -456,20 +688,32 @@ function bindEvents() {
   $("btnBackConfig").addEventListener("click", () => showScreen("config"));
   $("btnNewTest").addEventListener("click", () => showScreen("config"));
   $("btnRetryWrong").addEventListener("click", () => {
-    $("modeSelect").value = "falladas";
+    $("modeSelect").value = "wrong_all";
+    updateTimePlaceholder();
     showScreen("config");
   });
-  $("modeSelect").addEventListener("change", () => {
-    const value = $("modeSelect").value;
-    $("timeInput").placeholder = value === "general" ? "120" : value === "administrativo" ? "60" : value === "mixto" ? "180" : "30";
+  $("modeSelect").addEventListener("change", updateTimePlaceholder);
+  $("libraryList").addEventListener("click", (event) => {
+    const selectButton = event.target.closest(".select-exam");
+    if (selectButton) {
+      selectedExamId = selectButton.dataset.examId;
+      saveLibrary();
+      setMessage("Examen seleccionado.", "success");
+      return;
+    }
+    const deleteButton = event.target.closest(".delete-exam");
+    if (deleteButton) {
+      deleteExam(deleteButton.dataset.examId);
+    }
   });
 }
 
 function init() {
   bindEvents();
   setupDragDrop();
-  loadSavedExam();
-  renderLoadedExam();
+  loadLibrary();
+  renderLibrary();
+  updateTimePlaceholder();
   checkServer();
 }
 

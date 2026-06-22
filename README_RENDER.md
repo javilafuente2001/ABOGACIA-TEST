@@ -4,6 +4,10 @@ Aplicación rápida para preparar el examen de acceso a la abogacía:
 
 - Importa PDF oficial con respuestas en rojo.
 - Extrae preguntas de parte general y administrativo/contencioso-administrativo.
+- Biblioteca local de exámenes guardados en el navegador.
+- Test por examen concreto, por parte general, por administrativo o mixto.
+- Modo aleatorio que mezcla preguntas de todos los exámenes guardados.
+- Banco de falladas acumulado para repetir errores; cuando aciertas una pregunta fallada, sale del banco.
 - Test pregunta a pregunta con contador.
 - Resumen final de aciertos, fallos y sin responder.
 - Explicación con IA si configuras `OPENAI_API_KEY`.
@@ -165,3 +169,17 @@ reserva: sí/no
 
 En el plan gratuito, Render puede dormir la app cuando está un rato sin uso. Al entrar de nuevo, puede tardar cerca de un minuto en despertar. Esto es normal en el plan Free.
 
+
+---
+
+## 7. Biblioteca local y falladas
+
+La app guarda los exámenes en el navegador con `localStorage`. Esto significa:
+
+- Si subes un PDF, queda guardado en ese ordenador y navegador.
+- Puedes tener varios exámenes guardados y elegir cuál practicar.
+- El modo aleatorio puede mezclar preguntas de todos los exámenes guardados.
+- Las falladas se guardan automáticamente. Si vuelves a acertar una pregunta que estaba en falladas, se elimina de ese banco.
+- Si cambias de ordenador o navegador, tendrás que volver a subir los PDFs, salvo que en el futuro se conecte a MySQL u otra base de datos.
+
+No se guardan PDFs completos en Render: se guardan las preguntas extraídas en el navegador.
