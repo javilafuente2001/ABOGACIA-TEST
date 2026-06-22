@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LEX TEST | Abogacía</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">⚖️</div>
+        <div>
+          <div class="brand-title">L E X &nbsp; T E S T</div>
+          <div class="brand-subtitle">Preparación examen de acceso a la abogacía</div>
+        </div>
+      </div>
+      <div class="status-pill" id="serverStatus">Conectando...</div>
+    </header>
+
+    <main>
+      <section id="screenConfig" class="screen active">
+        <div class="hero-card">
+          <div class="hero-copy">
+            <span class="eyebrow">Modo examen online</span>
+            <h1>Configura tu test y empieza a practicar.</h1>
+            <p>Sube una plantilla oficial en PDF, elige bloque y haz el examen pregunta a pregunta con contador.</p>
+          </div>
+          <div class="hero-metrics">
+            <div class="metric-card">
+              <span id="metricGeneral">0</span>
+              <small>Generales</small>
+            </div>
+            <div class="metric-card">
+              <span id="metricAdmin">0</span>
+              <small>Administrativo</small>
+            </div>
+            <div class="metric-card">
+              <span id="metricReview">0</span>
+              <small>Revisar</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-grid">
+          <section class="panel upload-panel">
+            <div class="panel-head">
+              <div>
+                <h2>1. Cargar preguntas</h2>
+                <p>PDF oficial o Excel con columnas: pregunta, a, b, c, d, correcta.</p>
+              </div>
+            </div>
+
+            <label class="dropzone" id="dropzone">
+              <input id="fileInput" type="file" accept=".pdf,.xlsx,.xlsm,.json" />
+              <span class="drop-icon">📄</span>
+              <strong>Arrastra aquí el archivo o pulsa para elegirlo</strong>
+              <small>La respuesta correcta se detecta por el texto rojo del PDF oficial.</small>
+            </label>
+
+            <div class="file-actions">
+              <button class="btn primary" id="btnImport" type="button">Analizar archivo</button>
+              <button class="btn ghost" id="btnLoadSaved" type="button">Usar último importado</button>
+            </div>
+
+            <div id="importMessage" class="message hidden"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>2. Configuración del test</h2>
+                <p>Elige bloque, tiempo y si quieres incluir reservas.</p>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <label for="modeSelect">Bloque</label>
+              <select id="modeSelect">
+                <option value="general">Parte general · 120 min</option>
+                <option value="administrativo">Administrativo · 60 min</option>
+                <option value="mixto">General + Administrativo · 180 min</option>
+                <option value="falladas">Repetir falladas</option>
+              </select>
+            </div>
+
+            <div class="switch-line">
+              <div>
+                <strong>Incluir preguntas de reserva</strong>
+                <span>Útil para repasar todo el PDF.</span>
+              </div>
+              <label class="switch">
+                <input id="includeReserve" type="checkbox">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="switch-line">
+              <div>
+                <strong>Orden aleatorio</strong>
+                <span>Mezcla preguntas y opciones.</span>
+              </div>
+              <label class="switch">
+                <input id="shuffleQuestions" type="checkbox" checked>
+                <span></span>
+              </label>
+            </div>
+
+            <div class="form-row two-cols">
+              <div>
+                <label for="limitInput">Nº preguntas</label>
+                <input id="limitInput" type="number" min="1" placeholder="Todas" />
+              </div>
+              <div>
+                <label for="timeInput">Minutos</label>
+                <input id="timeInput" type="number" min="1" placeholder="Auto" />
+              </div>
+            </div>
+
+            <button class="btn start" id="btnStart" type="button">Comenzar test →</button>
+          </section>
+        </div>
+
+        <section class="panel imported-panel">
+          <div class="panel-head compact">
+            <div>
+              <h2>Último examen cargado</h2>
+              <p id="loadedExamName">Todavía no hay preguntas cargadas.</p>
+            </div>
+            <button class="btn danger-ghost" id="btnClear" type="button">Borrar datos</button>
+          </div>
+          <div class="chips" id="loadedChips"></div>
+        </section>
+      </section>
+
+      <section id="screenTest" class="screen">
+        <div class="exam-layout">
+          <aside class="exam-side">
+            <button class="back-link" id="btnExitTest" type="button">← Salir</button>
+            <div class="timer-card">
+              <span>Tiempo restante</span>
+              <strong id="timerText">00:00</strong>
+            </div>
+            <div class="side-stat">
+              <span>Pregunta</span>
+              <strong><b id="currentNumber">1</b>/<b id="totalNumber">0</b></strong>
+            </div>
+            <div class="side-stat">
+              <span>Respondidas</span>
+              <strong id="answeredCount">0</strong>
+            </div>
+          </aside>
+
+          <section class="question-card">
+            <div class="progress-wrap">
+              <div class="progress-top">
+                <span id="questionArea">General</span>
+                <span id="progressPercent">0%</span>
+              </div>
+              <div class="progress-bar"><div id="progressFill"></div></div>
+            </div>
+
+            <article>
+              <h2 id="questionText">Pregunta</h2>
+              <div id="optionsList" class="options-list"></div>
+            </article>
+
+            <div id="questionWarning" class="message warning hidden">Selecciona una respuesta antes de continuar.</div>
+
+            <div class="question-actions">
+              <button class="btn ghost" id="btnPrev" type="button">← Anterior</button>
+              <button class="btn primary big" id="btnNext" type="button">Siguiente pregunta →</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="screenResults" class="screen">
+        <div class="results-hero">
+          <button class="back-link" id="btnBackConfig" type="button">← Volver a configuración</button>
+          <h1>Resumen del test</h1>
+          <p id="resultSubtitle">Resultado del examen realizado.</p>
+          <div class="result-cards">
+            <div class="result-card success"><span id="scoreOk">0</span><small>Aciertos</small></div>
+            <div class="result-card error"><span id="scoreKo">0</span><small>Fallos</small></div>
+            <div class="result-card"><span id="scoreBlank">0</span><small>Sin responder</small></div>
+            <div class="result-card"><span id="scorePercent">0%</span><small>Porcentaje</small></div>
+          </div>
+        </div>
+
+        <div class="results-actions">
+          <button class="btn start" id="btnRetryWrong" type="button">Repetir falladas</button>
+          <button class="btn ghost" id="btnNewTest" type="button">Nuevo test</button>
+        </div>
+
+        <section class="panel review-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Corrección pregunta a pregunta</h2>
+              <p>Pulsa “Explicar con IA” en las falladas cuando tengas configurada la clave.</p>
+            </div>
+          </div>
+          <div id="reviewList" class="review-list"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
