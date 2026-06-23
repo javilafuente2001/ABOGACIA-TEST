@@ -27,9 +27,19 @@ try:
 except Exception:  # pragma: no cover
     openpyxl = None
 
-APP_VERSION = "2.1-gemini"
+APP_VERSION = "2.2-gemini-fallback"
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_MODELS",
+        "gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.0-flash,gemini-2.0-flash-lite"
+    ).split(",")
+    if model.strip()
+]
+if GEMINI_MODEL and GEMINI_MODEL not in GEMINI_MODELS:
+    GEMINI_MODELS.insert(0, GEMINI_MODEL)
 
 app = FastAPI(title="Abogacía Test", version=APP_VERSION)
 
@@ -415,20 +425,45 @@ async def explain(req: ExplainRequest):
     system_msg = "Eres preparador del examen de acceso a la abogacía en España. Explica de forma breve, clara y práctica por qué la opción correcta lo es y por qué la marcada no lo es. No inventes artículos concretos si no estás seguro. Máximo 130 palabras."
     user_msg = json.dumps(user_payload, ensure_ascii=False)
 
-    # Prioridad: Gemini si existe GEMINI_API_KEY. Si no, usa OpenAI como alternativa.
+    # Prioridad: Gemini si existe GEMINI_API_KEY. Si un modelo está saturado o falla, probamos el siguiente.
     if gemini_key:
         if genai is None:
             raise HTTPException(status_code=500, detail="El paquete google-genai no está instalado")
-        try:
-            client = genai.Client(api_key=gemini_key)
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=f"{system_msg}\n\nDatos de la pregunta en JSON:\n{user_msg}",
-            )
-            text = (getattr(response, "text", "") or "").strip()
-            return {"ok": True, "provider": "gemini", "explanation": text or "No se ha podido generar una explicación."}
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Error al llamar a Gemini: {exc}") from exc
+
+        client = genai.Client(api_key=gemini_key)
+        prompt = f"{system_msg}\n\nDatos de la pregunta en JSON:\n{user_msg}"
+        errors: List[str] = []
+
+        for model_name in GEMINI_MODELS:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                text = (getattr(response, "text", "") or "").strip()
+                if text:
+                    return {
+                        "ok": True,
+                        "provider": "gemini",
+                        "model": model_name,
+                        "explanation": text,
+                    }
+                errors.append(f"{model_name}: respuesta vacía")
+            except Exception as exc:
+                error_text = str(exc)
+                errors.append(f"{model_name}: {error_text[:220]}")
+
+                # Si es saturación, cuota, límite temporal o caída del modelo, pasamos al siguiente.
+                # Si es clave inválida/permisos, no tiene sentido seguir intentando.
+                retryable = any(code in error_text for code in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL"])
+                auth_error = any(code in error_text for code in ["401", "403", "API key not valid", "PERMISSION_DENIED"])
+                if auth_error and not retryable:
+                    raise HTTPException(status_code=502, detail=f"Error de Gemini con la clave/permisos: {exc}") from exc
+
+        raise HTTPException(
+            status_code=502,
+            detail="Gemini no ha respondido con ningún modelo disponible. Intentados: " + " | ".join(errors),
+        )
 
     if OpenAI is None:
         raise HTTPException(status_code=500, detail="El paquete openai no está instalado")
