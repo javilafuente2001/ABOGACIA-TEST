@@ -27,7 +27,7 @@ try:
 except Exception:  # pragma: no cover
     openpyxl = None
 
-APP_VERSION = "2.2-gemini-fallback"
+APP_VERSION = "2.4-pdf-safe-pause-solutions"
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 GEMINI_MODELS = [
@@ -78,16 +78,40 @@ def is_red_color(color: Optional[int]) -> bool:
 
 
 def line_text_with_red(line: Dict[str, Any]) -> Dict[str, Any]:
+    """Return text plus reliable red-character information for a PDF line.
+
+    The official templates mark the correct option in red. The previous
+    version only stored a boolean per line; this version stores how many
+    red characters belong to each line so that the parser can decide the
+    correct answer at question-finalization time instead of overwriting it
+    while reading line continuations.
+    """
     text_parts: List[str] = []
-    red = False
+    red_parts: List[str] = []
+    red_chars = 0
+    total_chars = 0
+
     for span in line.get("spans", []):
-        txt = span.get("text", "")
-        if txt:
-            text_parts.append(txt)
-            if is_red_color(span.get("color")):
-                red = True
+        txt = span.get("text", "") or ""
+        if not txt:
+            continue
+        text_parts.append(txt)
+        clean_len = len(txt.strip())
+        total_chars += clean_len
+        if is_red_color(span.get("color")):
+            red_parts.append(txt)
+            red_chars += clean_len
+
     bbox = line.get("bbox", [0, 0, 0, 0])
-    return {"text": normalize_space("".join(text_parts)), "red": red, "y": bbox[1], "x": bbox[0]}
+    return {
+        "text": normalize_space("".join(text_parts)),
+        "red": red_chars > 0,
+        "red_chars": red_chars,
+        "red_text": normalize_space("".join(red_parts)),
+        "total_chars": total_chars,
+        "y": bbox[1],
+        "x": bbox[0],
+    }
 
 
 def extract_pdf_lines(file_bytes: bytes) -> List[Dict[str, Any]]:
@@ -114,11 +138,17 @@ def extract_pdf_lines(file_bytes: bytes) -> List[Dict[str, Any]]:
     return lines
 
 
-QUESTION_RE = re.compile(r"^(\d{1,3})\s*[\-–—\.]+\s*(.*)$")
-OPTION_RE = re.compile(r"^([a-dA-D])\)\s*(.*)$")
+QUESTION_RE = re.compile(r"^(\d{1,3})\s*(?:[\-–—]+|\.(?!\d))\s*(.*)$")
+OPTION_RE = re.compile(r"^([a-zA-Z])\)\s*(.*)$")
 
 
 def area_from_line(text: str) -> Optional[str]:
+    # Never classify a real numbered question as a section heading.
+    # Some questions contain words like "especialidad" and
+    # "contencioso-administrativo", which previously made the parser
+    # lose that question.
+    if QUESTION_RE.match(text):
+        return None
     low = strip_accents(text).lower()
     if "materias comunes" in low:
         return "general"
@@ -145,26 +175,110 @@ def new_question(area: str, number: int, reserve: bool, page: int) -> Dict[str, 
     }
 
 
+def register_option_red(q: Dict[str, Any], option_index: int, raw_line: Dict[str, Any]) -> None:
+    if option_index < 0 or option_index >= len(q.get("options", [])):
+        return
+    red_chars = int(raw_line.get("red_chars", 0) or 0)
+    if red_chars <= 0:
+        return
+    opt = q["options"][option_index]
+    opt["_red_chars"] = int(opt.get("_red_chars", 0) or 0) + red_chars
+    if raw_line.get("red_text"):
+        opt.setdefault("_red_text", [])
+        opt["_red_text"].append(str(raw_line.get("red_text")))
+
+
+def is_annulled_question_text(text: str) -> bool:
+    low = strip_accents(text).upper()
+    return "ANULADA" in low or "PREGUNTA ANULADA" in low
+
+
 def finalize_question(q: Optional[Dict[str, Any]], questions: List[Dict[str, Any]], exam_slug: str) -> None:
     if not q:
         return
+
     q["question"] = normalize_space(q.get("question", ""))
-    q["options"] = [
-        {"key": opt["key"].lower(), "text": normalize_space(opt.get("text", ""))}
-        for opt in q.get("options", [])
-        if opt.get("text", "").strip()
-    ]
-    if "ANULADA" in q["question"].upper() and not q["options"]:
+
+    if is_annulled_question_text(q["question"]):
+        # Official templates sometimes write only "ANULADA" and use reserve
+        # questions instead. We do not keep the annulled item as a test question.
         return
-    if len(q["options"]) < 2:
+
+    cleaned_options: List[Dict[str, Any]] = []
+    for opt in q.get("options", []):
+        text = normalize_space(opt.get("text", ""))
+        key = str(opt.get("key", "")).lower().strip()
+        if not key or not text:
+            continue
+        cleaned_options.append({
+            "key": key,
+            "text": text,
+            "_red_chars": int(opt.get("_red_chars", 0) or 0),
+            "_red_text": opt.get("_red_text", []),
+        })
+
+    if len(cleaned_options) < 2:
         return
-    if q.get("correct") not in [opt["key"] for opt in q["options"]]:
-        # If the red color was not detected, keep the question but mark it for manual review.
-        q["needs_review"] = True
+
+    # Decide the correct answer from the complete option, not from the last
+    # red line read. This avoids overwrites and supports options that wrap
+    # across several lines.
+    scored = [(opt["key"], int(opt.get("_red_chars", 0) or 0)) for opt in cleaned_options]
+    positive = [(key, score) for key, score in scored if score > 0]
+    correct: Optional[str] = None
+    needs_review = False
+
+    if len(positive) == 1:
+        correct = positive[0][0]
+    elif len(positive) > 1:
+        ordered = sorted(positive, key=lambda item: item[1], reverse=True)
+        # Very defensive fallback: if one option has almost all red text and
+        # another only inherited a tiny artifact, accept the dominant one;
+        # otherwise do not guess.
+        if ordered[0][1] >= 8 and ordered[0][1] >= max(ordered[1][1] * 4, ordered[1][1] + 20):
+            correct = ordered[0][0]
+        else:
+            needs_review = True
     else:
-        q["needs_review"] = False
+        needs_review = True
+
+    q["options"] = [{"key": opt["key"], "text": opt["text"]} for opt in cleaned_options]
+    q["red_scores"] = {key: score for key, score in scored}
+    q["correct"] = correct
+    q["needs_review"] = needs_review or correct not in [opt["key"] for opt in q["options"]]
+    q["correct_source"] = "pdf_red" if not q["needs_review"] else "needs_review"
     q["id"] = f"{exam_slug}-{q['area']}-{'reserva' if q['reserve'] else 'principal'}-{q['number']}"
     questions.append(q)
+
+
+def promote_reserve_substitutions(questions: List[Dict[str, Any]], pending_substitutions: Dict[str, List[int]]) -> None:
+    """Promote reserve questions used to replace annulled main questions.
+
+    Some official templates say e.g. "ANULADA. Se sustituye por la primera
+    pregunta de reserva". If we simply drop the annulled question, the main
+    test would have fewer questions. This promotes the first reserve questions
+    of the same area into the main bank, preserving that they came from reserve
+    and renumbering them as the annulled question they replace.
+    """
+    for area, annulled_numbers in pending_substitutions.items():
+        if not annulled_numbers:
+            continue
+        replacements = list(annulled_numbers)
+        replacement_index = 0
+        for q in questions:
+            if replacement_index >= len(replacements):
+                break
+            if q.get("area") == area and q.get("reserve"):
+                original_reserve_number = q.get("number")
+                q["reserve"] = False
+                q["was_reserve_substitute"] = True
+                q["original_reserve_number"] = original_reserve_number
+                q["replaces_annulled_number"] = replacements[replacement_index]
+                q["number"] = replacements[replacement_index]
+                q["id"] = q["id"].replace("-reserva-", "-sustituta-")
+                q["id"] = re.sub(r"-\d+$", f"-{q['number']}", q["id"])
+                replacement_index += 1
+
 
 
 def parse_pdf_questions(file_bytes: bytes, filename: str = "examen.pdf") -> Dict[str, Any]:
@@ -177,6 +291,7 @@ def parse_pdf_questions(file_bytes: bytes, filename: str = "examen.pdf") -> Dict
     reserve = False
     q: Optional[Dict[str, Any]] = None
     current_option_index: Optional[int] = None
+    pending_substitutions: Dict[str, List[int]] = {"general": [], "administrativo": []}
 
     for raw in lines:
         text = normalize_space(raw["text"])
@@ -207,11 +322,17 @@ def parse_pdf_questions(file_bytes: bytes, filename: str = "examen.pdf") -> Dict
         if qm:
             number = int(qm.group(1))
             after = normalize_space(qm.group(2))
-            # Avoid matching list items that are actually not questions, but keep official numbering.
             finalize_question(q, questions, exam_slug)
+            q = None
+            current_option_index = None
+
+            if is_annulled_question_text(after):
+                if current_area in pending_substitutions and not reserve:
+                    pending_substitutions[current_area].append(number)
+                continue
+
             q = new_question(current_area, number, reserve, int(raw.get("page", 0) or 0))
             q["question"] = after
-            current_option_index = None
             if raw.get("red"):
                 q["has_red_in_question"] = True
             continue
@@ -223,21 +344,20 @@ def parse_pdf_questions(file_bytes: bytes, filename: str = "examen.pdf") -> Dict
         if om:
             key = om.group(1).lower()
             option_text = normalize_space(om.group(2))
-            q["options"].append({"key": key, "text": option_text})
+            q["options"].append({"key": key, "text": option_text, "_red_chars": 0, "_red_text": []})
             current_option_index = len(q["options"]) - 1
-            if raw.get("red"):
-                q["correct"] = key
+            register_option_red(q, current_option_index, raw)
             continue
 
         # Continuation line: it belongs to the current option if one has started; otherwise to the question.
         if current_option_index is not None and q.get("options"):
             q["options"][current_option_index]["text"] += " " + text
-            if raw.get("red"):
-                q["correct"] = q["options"][current_option_index]["key"]
+            register_option_red(q, current_option_index, raw)
         else:
             q["question"] += " " + text
 
     finalize_question(q, questions, exam_slug)
+    promote_reserve_substitutions(questions, pending_substitutions)
 
     by_area = {
         "general": sum(1 for item in questions if item["area"] == "general" and not item["reserve"]),

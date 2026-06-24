@@ -8,8 +8,9 @@ Aplicación rápida para preparar el examen de acceso a la abogacía:
 - Test por examen concreto, por parte general, por administrativo o mixto.
 - Modo aleatorio que mezcla preguntas de todos los exámenes guardados.
 - Banco de falladas acumulado para repetir errores; cuando aciertas una pregunta fallada, sale del banco.
-- Test pregunta a pregunta con contador.
+- Test pregunta a pregunta con contador y botón de pausa.
 - Resumen final de aciertos, fallos y sin responder.
+- Pantalla de soluciones para comprobar qué respuesta ha leído la app como correcta en cada examen.
 - Explicación con IA si configuras `OPENAI_API_KEY`.
 - Funciona online: la persona usuaria no instala Python.
 
@@ -135,15 +136,16 @@ Debe aparecer:
 
 1. Entra en la URL de Render.
 2. Sube el PDF oficial.
-3. Pulsa **Analizar archivo**.
-4. Elige bloque:
+3. Pulsa **Analizar y guardar**.
+4. Puedes pulsar **Ver soluciones** en cualquier examen guardado para comprobar las respuestas detectadas.
+5. Elige bloque:
    - Parte general: 120 minutos.
    - Administrativo: 60 minutos.
    - General + Administrativo: 180 minutos.
    - Repetir falladas.
-5. Pulsa **Comenzar test**.
-6. Responde pregunta a pregunta.
-7. Al finalizar verás resumen y corrección.
+6. Pulsa **Comenzar test**.
+7. Responde pregunta a pregunta. Puedes pausar el contador con **Pausar tiempo**.
+8. Al finalizar verás resumen y corrección.
 
 ---
 
@@ -204,3 +206,16 @@ PYTHON_VERSION = 3.11.9
 4. Haz `Manual Deploy > Clear build cache & deploy`.
 
 La app prioriza Gemini si existe `GEMINI_API_KEY`. Si no existe, intenta usar OpenAI con `OPENAI_API_KEY`.
+
+
+## 8. Comprobar soluciones leídas del PDF
+
+En cada tarjeta de examen guardado aparece el botón **Ver soluciones**. Esa pantalla muestra:
+
+- Pregunta, número y bloque.
+- Respuesta correcta detectada desde el rojo del PDF.
+- Todas las opciones, marcando en azul la correcta.
+- Filtro por general, administrativo, reservas o preguntas dudosas.
+- Botón para imprimir o guardar el listado como PDF desde el navegador.
+
+Si una pregunta aparece como **Revisar**, no entra en el test normal hasta que se compruebe manualmente.

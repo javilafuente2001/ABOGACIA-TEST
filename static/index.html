@@ -150,7 +150,7 @@
           <div class="panel-head compact">
             <div>
               <h2>Mis exámenes guardados</h2>
-              <p>Elige qué examen quieres practicar. También puedes borrar uno concreto o limpiar todas las falladas.</p>
+              <p>Elige qué examen quieres practicar. También puedes borrar uno concreto, ver sus soluciones o limpiar todas las falladas.</p>
             </div>
             <div class="file-actions no-margin">
               <button class="btn ghost" id="btnClearWrong" type="button">Borrar falladas</button>
@@ -166,10 +166,12 @@
         <div class="exam-layout">
           <aside class="exam-side">
             <button class="back-link" id="btnExitTest" type="button">← Salir</button>
-            <div class="timer-card">
+            <div class="timer-card" id="timerCard">
               <span>Tiempo restante</span>
               <strong id="timerText">00:00</strong>
             </div>
+            <button class="btn ghost pause-btn" id="btnPauseTimer" type="button">⏸ Pausar tiempo</button>
+            <div class="pause-note hidden" id="pauseNote">Tiempo pausado. Pulsa reanudar para continuar.</div>
             <div class="side-stat">
               <span>Pregunta</span>
               <strong><b id="currentNumber">1</b>/<b id="totalNumber">0</b></strong>
@@ -181,6 +183,13 @@
           </aside>
 
           <section class="question-card">
+            <div class="pause-overlay hidden" id="pauseOverlay">
+              <div>
+                <strong>⏸ Test pausado</strong>
+                <span>El contador está detenido.</span>
+                <button class="btn primary" id="btnResumeOverlay" type="button">Reanudar test</button>
+              </div>
+            </div>
             <div class="progress-wrap">
               <div class="progress-top">
                 <span id="questionArea">General</span>
@@ -202,6 +211,36 @@
             </div>
           </section>
         </div>
+      </section>
+
+      <section id="screenSolutions" class="screen">
+        <div class="solutions-hero">
+          <button class="back-link" id="btnBackFromSolutions" type="button">← Volver a configuración</button>
+          <h1 id="solutionsTitle">Soluciones del examen</h1>
+          <p id="solutionsSubtitle">Comprueba qué respuesta ha leído la app como correcta en cada pregunta.</p>
+
+          <div class="solution-toolbar">
+            <label for="solutionsFilter">Filtrar bloque</label>
+            <select id="solutionsFilter">
+              <option value="all">Todas las preguntas</option>
+              <option value="general">Solo parte general</option>
+              <option value="administrativo">Solo administrativo</option>
+              <option value="reserve">Solo reservas</option>
+              <option value="review">Solo revisar/dudosas</option>
+            </select>
+            <button class="btn ghost" id="btnPrintSolutions" type="button">Imprimir / guardar PDF</button>
+          </div>
+        </div>
+
+        <section class="panel review-panel solutions-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Listado de soluciones</h2>
+              <p>La opción marcada en azul es la respuesta correcta detectada desde el PDF. Si aparece “Revisar”, no la uses hasta comprobarla manualmente.</p>
+            </div>
+          </div>
+          <div id="solutionsList" class="solutions-list"></div>
+        </section>
       </section>
 
       <section id="screenResults" class="screen">

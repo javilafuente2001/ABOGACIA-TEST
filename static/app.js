@@ -10,10 +10,12 @@ let library = [];
 let selectedExamId = null;
 let session = null;
 let timerHandle = null;
+let currentSolutionsExamId = null;
 
 const screens = {
   config: $("screenConfig"),
   test: $("screenTest"),
+  solutions: $("screenSolutions"),
   results: $("screenResults"),
 };
 
@@ -73,6 +75,18 @@ function optionText(question, key) {
   if (!key) return "Sin responder";
   const opt = question.options.find((o) => o.key === key);
   return opt ? `${key.toUpperCase()}) ${opt.text}` : key.toUpperCase();
+}
+
+function sourceQuestionLabel(q) {
+  const parts = [];
+  if (q.exam_name) parts.push(q.exam_name);
+  parts.push(areaLabel(q.area));
+  if (q.reserve) parts.push("reserva");
+  if (q.was_reserve_substitute) {
+    parts.push(`sustituye anulada ${q.replaces_annulled_number || q.number}`);
+  }
+  if (q.source_page) parts.push(`pág. ${q.source_page}`);
+  return parts.filter(Boolean).join(" · ");
 }
 
 function escapeHtml(value) {
@@ -265,6 +279,7 @@ function renderLibrary() {
           <button class="btn ${selected ? "primary" : "ghost"} select-exam" type="button" data-exam-id="${escapeHtml(exam.exam_id)}">
             ${selected ? "Seleccionado" : "Elegir examen"}
           </button>
+          <button class="btn ghost solutions-exam" type="button" data-exam-id="${escapeHtml(exam.exam_id)}">Ver soluciones</button>
           <button class="btn danger-ghost delete-exam" type="button" data-exam-id="${escapeHtml(exam.exam_id)}">Borrar</button>
         </div>
       </article>
@@ -282,6 +297,89 @@ function renderLibrary() {
       `Revisar: ${stats.needs_review || 0}`,
     ].map((t) => `<span class="chip">${t}</span>`).join("");
   }
+}
+
+function getSolutionsExam() {
+  return library.find((exam) => exam.exam_id === currentSolutionsExamId) || null;
+}
+
+function showExamSolutions(examId) {
+  const exam = library.find((item) => item.exam_id === examId);
+  if (!exam) {
+    setMessage("No he encontrado ese examen en la biblioteca.", "error");
+    return;
+  }
+  currentSolutionsExamId = examId;
+  $("solutionsFilter").value = "all";
+  renderSolutions();
+  showScreen("solutions");
+}
+
+function renderSolutions() {
+  const exam = getSolutionsExam();
+  const list = $("solutionsList");
+  if (!exam) {
+    $("solutionsTitle").textContent = "Soluciones del examen";
+    $("solutionsSubtitle").textContent = "No hay examen seleccionado.";
+    list.innerHTML = "";
+    return;
+  }
+
+  const filter = $("solutionsFilter").value;
+  const stats = exam.stats || computeStats(exam.questions || []);
+  const by = stats.by_area || {};
+  let questions = [...(exam.questions || [])];
+
+  if (filter === "general") questions = questions.filter((q) => q.area === "general" && !q.reserve);
+  if (filter === "administrativo") questions = questions.filter((q) => q.area === "administrativo" && !q.reserve);
+  if (filter === "reserve") questions = questions.filter((q) => q.reserve || q.was_reserve_substitute);
+  if (filter === "review") questions = questions.filter((q) => q.needs_review || !q.correct);
+
+  $("solutionsTitle").textContent = exam.exam_name || "Soluciones del examen";
+  $("solutionsSubtitle").textContent = [
+    `General: ${by.general || 0}`,
+    `Administrativo: ${by.administrativo || 0}`,
+    `Reservas: ${(by.general_reserva || 0) + (by.administrativo_reserva || 0)}`,
+    `Revisar: ${stats.needs_review || 0}`,
+  ].join(" · ");
+
+  if (!questions.length) {
+    list.innerHTML = `<div class="empty-state">No hay preguntas para este filtro.</div>`;
+    return;
+  }
+
+  list.innerHTML = questions.map((q, idx) => {
+    const correctOpt = Array.isArray(q.options) ? q.options.find((opt) => opt.key === q.correct) : null;
+    const needsReview = q.needs_review || !q.correct || !correctOpt;
+    const badges = [
+      areaLabel(q.area),
+      q.reserve ? "Reserva" : "Principal",
+      q.was_reserve_substitute ? `Sustituye anulada ${q.replaces_annulled_number || q.number}` : "",
+      needsReview ? "Revisar" : "OK",
+    ].filter(Boolean);
+
+    return `
+      <article class="solution-item ${needsReview ? "needs-review" : ""}">
+        <div class="solution-title-row">
+          <div class="solution-title">${idx + 1}. Pregunta ${escapeHtml(q.number)} · ${escapeHtml(q.question)}</div>
+          <div class="solution-badges">${badges.map((b) => `<span>${escapeHtml(b)}</span>`).join("")}</div>
+        </div>
+        <div class="solution-source">${escapeHtml(sourceQuestionLabel(q))}</div>
+        <div class="solution-correct">
+          Correcta detectada: <strong>${needsReview ? "REVISAR" : escapeHtml(optionText(q, q.correct))}</strong>
+        </div>
+        <div class="solution-options">
+          ${(q.options || []).map((opt) => `
+            <div class="solution-option ${opt.key === q.correct ? "correct" : ""}">
+              <span>${escapeHtml(opt.key)}</span>
+              <p>${escapeHtml(opt.text)}</p>
+            </div>
+          `).join("")}
+        </div>
+        ${q.red_scores ? `<details class="red-scores"><summary>Ver lectura interna del rojo</summary><pre>${escapeHtml(JSON.stringify(q.red_scores, null, 2))}</pre></details>` : ""}
+      </article>
+    `;
+  }).join("");
 }
 
 async function importFile() {
@@ -414,10 +512,12 @@ function startTest() {
     mode,
     examName,
     modeName: modeLabel(mode),
+    paused: false,
   };
 
   showScreen("test");
   renderQuestion();
+  updatePauseUi();
   startTimer();
 }
 
@@ -425,11 +525,32 @@ function startTimer() {
   clearInterval(timerHandle);
   $("timerText").textContent = formatTime(session.secondsLeft);
   timerHandle = setInterval(() => {
-    if (!session || session.finished) return;
+    if (!session || session.finished || session.paused) return;
     session.secondsLeft -= 1;
     $("timerText").textContent = formatTime(session.secondsLeft);
     if (session.secondsLeft <= 0) finishTest();
   }, 1000);
+}
+
+function togglePause() {
+  if (!session || session.finished) return;
+  session.paused = !session.paused;
+  updatePauseUi();
+}
+
+function updatePauseUi() {
+  const paused = !!session && !session.finished && !!session.paused;
+  const btn = $("btnPauseTimer");
+  const note = $("pauseNote");
+  const overlay = $("pauseOverlay");
+  const timerCard = $("timerCard");
+  if (btn) {
+    btn.textContent = paused ? "▶ Reanudar tiempo" : "⏸ Pausar tiempo";
+    btn.classList.toggle("paused", paused);
+  }
+  if (note) note.classList.toggle("hidden", !paused);
+  if (overlay) overlay.classList.toggle("hidden", !paused);
+  if (timerCard) timerCard.classList.toggle("paused", paused);
 }
 
 function renderQuestion() {
@@ -509,7 +630,9 @@ function updateWrongBank(results) {
 function finishTest() {
   if (!session || session.finished) return;
   session.finished = true;
+  session.paused = false;
   clearInterval(timerHandle);
+  updatePauseUi();
 
   const results = session.questions.map((q, idx) => {
     const selected = session.answers[q.id] || null;
@@ -679,10 +802,13 @@ function bindEvents() {
   $("btnStart").addEventListener("click", () => startTest());
   $("btnNext").addEventListener("click", nextQuestion);
   $("btnPrev").addEventListener("click", prevQuestion);
+  $("btnPauseTimer").addEventListener("click", togglePause);
+  $("btnResumeOverlay").addEventListener("click", togglePause);
   $("btnExitTest").addEventListener("click", () => {
     if (confirm("¿Salir del test actual? Se perderá el progreso.")) {
       clearInterval(timerHandle);
       session = null;
+      updatePauseUi();
       showScreen("config");
     }
   });
@@ -693,6 +819,9 @@ function bindEvents() {
     updateTimePlaceholder();
     showScreen("config");
   });
+  $("btnBackFromSolutions").addEventListener("click", () => showScreen("config"));
+  $("solutionsFilter").addEventListener("change", renderSolutions);
+  $("btnPrintSolutions").addEventListener("click", () => window.print());
   $("modeSelect").addEventListener("change", updateTimePlaceholder);
   $("libraryList").addEventListener("click", (event) => {
     const selectButton = event.target.closest(".select-exam");
@@ -700,6 +829,11 @@ function bindEvents() {
       selectedExamId = selectButton.dataset.examId;
       saveLibrary();
       setMessage("Examen seleccionado.", "success");
+      return;
+    }
+    const solutionsButton = event.target.closest(".solutions-exam");
+    if (solutionsButton) {
+      showExamSolutions(solutionsButton.dataset.examId);
       return;
     }
     const deleteButton = event.target.closest(".delete-exam");
@@ -715,6 +849,7 @@ function init() {
   loadLibrary();
   renderLibrary();
   updateTimePlaceholder();
+  updatePauseUi();
   checkServer();
 }
 
