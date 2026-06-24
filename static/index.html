@@ -28,7 +28,7 @@
           <div class="hero-copy">
             <span class="eyebrow">Biblioteca + modo examen</span>
             <h1>Elige examen, bloque y empieza a practicar.</h1>
-            <p>Guarda tus PDFs en el navegador, practica por examen o mezcla preguntas aleatorias de todos los exámenes.</p>
+            <p>Guarda tus PDFs en el navegador, practica por examen o mezcla preguntas aleatorias de todos los exámenes y vademécums.</p>
           </div>
           <div class="hero-metrics">
             <div class="metric-card">
@@ -55,7 +55,7 @@
             <div class="panel-head">
               <div>
                 <h2>1. Subir y guardar examen</h2>
-                <p>PDF oficial o Excel con columnas: pregunta, a, b, c, d, correcta. Cada archivo se guarda en “Mis exámenes”.</p>
+                <p>PDF oficial, PDF tipo Vademecum o Excel con columnas: pregunta, a, b, c, d, correcta. Cada archivo se guarda en “Mis exámenes”.</p>
               </div>
             </div>
 
@@ -63,7 +63,7 @@
               <input id="fileInput" type="file" accept=".pdf,.xlsx,.xlsm,.json" />
               <span class="drop-icon">📄</span>
               <strong>Arrastra aquí el archivo o pulsa para elegirlo</strong>
-              <small>La respuesta correcta se detecta por el texto rojo del PDF oficial.</small>
+              <small>La respuesta correcta se detecta por el texto rojo del PDF oficial o por la marca “RESPUESTA CORRECTA: X” del Vademecum.</small>
             </label>
 
             <div class="file-actions">
@@ -236,7 +236,7 @@
           <div class="panel-head">
             <div>
               <h2>Listado de soluciones</h2>
-              <p>La opción marcada en azul es la respuesta correcta detectada desde el PDF. Si aparece “Revisar”, no la uses hasta comprobarla manualmente.</p>
+              <p>La opción marcada en azul es la respuesta correcta detectada desde el PDF. En oficiales se lee el rojo; en Vademecum se lee “RESPUESTA CORRECTA: X”. Si aparece “Revisar”, no la uses hasta comprobarla manualmente.</p>
             </div>
           </div>
           <div id="solutionsList" class="solutions-list"></div>

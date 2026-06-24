@@ -27,7 +27,7 @@ try:
 except Exception:  # pragma: no cover
     openpyxl = None
 
-APP_VERSION = "2.4-pdf-safe-pause-solutions"
+APP_VERSION = "2.5-vademecum-parser"
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 GEMINI_MODELS = [
@@ -281,7 +281,220 @@ def promote_reserve_substitutions(questions: List[Dict[str, Any]], pending_subst
 
 
 
+
+# -----------------------------------------------------------------------------
+# Parser alternativo para Vademecum / manuales de test
+# -----------------------------------------------------------------------------
+# Las plantillas oficiales del Ministerio marcan la respuesta correcta en rojo.
+# El Vademecum no usa ese sistema: escribe literalmente "RESPUESTA CORRECTA: A".
+# Por eso se usa un parser específico cuando detectamos esa marca textual.
+
+ANSWER_TEXT_RE = re.compile(r"^RESPUESTA\s+CORRECTA\s*:\s*([A-ZÑa-zñ])\b", re.IGNORECASE)
+QUESTION_NUMBER_TEXT_RE = re.compile(r"^(\d{1,2})\.\s+(.*)$")
+
+
+def extract_pdf_plain_lines(file_bytes: bytes) -> List[Dict[str, Any]]:
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    lines: List[Dict[str, Any]] = []
+    for page_index, page in enumerate(doc):
+        text = page.get_text("text")
+        for line in text.splitlines():
+            clean = normalize_space(line)
+            if clean:
+                lines.append({"text": clean, "page": page_index + 1})
+    return lines
+
+
+def is_vademecum_noise_line(text: str) -> bool:
+    low = strip_accents(text).lower().strip()
+    if not low:
+        return True
+    if re.fullmatch(r"\d{1,3}", low):
+        return True
+    # Cabeceras y pies repetidos del libro. Si se dejan, pueden acabar dentro del enunciado.
+    if "vademecum de acceso" in low:
+        return True
+    if "deontologia profesional, organizacion y ejercicio" in low:
+        return True
+    if low.startswith("a1. deontologia") or low.startswith("a2."):
+        return True
+    if low.startswith("materias comunes"):
+        return True
+    if low.startswith("sumario") or low.startswith("abreviaturas"):
+        return True
+    return False
+
+
+def clean_vademecum_question_text(lines: List[Dict[str, Any]], start_index: int, option_a_index: int) -> str:
+    items: List[str] = []
+    for index in range(start_index, option_a_index):
+        text = lines[index]["text"]
+        if not is_vademecum_noise_line(text):
+            items.append(text)
+
+    # El bloque relevante empieza tras el último rótulo CUESTIÓN/CUESTIONES.
+    last_marker = -1
+    for idx, text in enumerate(items):
+        marker = strip_accents(text).upper()
+        if marker in {"CUESTION", "CUESTIONES"}:
+            last_marker = idx
+    if last_marker >= 0:
+        items = items[last_marker + 1:]
+
+    # En bloques CUESTIONES puede haber preguntas abiertas antes de la tipo test.
+    # Nos quedamos desde el último "1.", "2.", etc. anterior a las opciones.
+    last_numbered = -1
+    for idx, text in enumerate(items):
+        if QUESTION_NUMBER_TEXT_RE.match(text):
+            last_numbered = idx
+    if last_numbered >= 0:
+        items = items[last_numbered:]
+
+    question = normalize_space(" ".join(items))
+    question = re.sub(r"^\d{1,2}\.\s*", "", question)
+    return question
+
+
+def find_vademecum_option_group(lines: List[Dict[str, Any]], answer_index: int) -> List[int]:
+    """Find the option block immediately before a 'RESPUESTA CORRECTA' line.
+
+    Some pages contain legal lists with a), b), c) inside the theory. We avoid
+    those by parsing backwards from the answer line and selecting the closest
+    complete option block. In one Vademecum page the labels are visibly duplicated
+    as 'a) b)'; for this reason the final labels are assigned by position.
+    """
+    starts: List[Dict[str, Any]] = []
+    for idx in range(max(0, answer_index - 140), answer_index):
+        match = OPTION_RE.match(lines[idx]["text"])
+        if match:
+            starts.append({"index": idx, "label": match.group(1).lower()})
+
+    candidates: List[List[int]] = []
+    for pos, item in enumerate(starts):
+        if item["label"] != "a":
+            continue
+        group = [entry["index"] for entry in starts[pos:]]
+        # Los test del Vademecum vienen con 4 opciones. Se permite 3-5 como margen.
+        # Si salen más, seguramente hemos enganchado una lista jurídica anterior.
+        if 3 <= len(group) <= 5:
+            candidates.append(group)
+
+    if candidates:
+        # Preferimos 4 opciones, luego el bloque más completo y, por último, el más cercano.
+        candidates.sort(key=lambda group: (abs(len(group) - 4), -len(group), group[0]))
+        return candidates[0]
+
+    # Fallback defensivo para documentos similares con etiquetas limpias a), b), c), d).
+    for pos, item in enumerate(starts):
+        if item["label"] != "a":
+            continue
+        expected = ord("a")
+        group: List[int] = []
+        for entry in starts[pos:]:
+            if ord(entry["label"]) != expected:
+                break
+            group.append(entry["index"])
+            expected += 1
+        if len(group) >= 2:
+            candidates.append(group)
+    return candidates[-1] if candidates else []
+
+
+def extract_vademecum_options(lines: List[Dict[str, Any]], option_indices: List[int], answer_index: int) -> List[Dict[str, str]]:
+    options: List[Dict[str, str]] = []
+    for pos, opt_index in enumerate(option_indices):
+        next_index = option_indices[pos + 1] if pos + 1 < len(option_indices) else answer_index
+        match = OPTION_RE.match(lines[opt_index]["text"])
+        if not match:
+            continue
+        first = normalize_space(match.group(2))
+        # Corrección de extracción del PDF: hay una página donde aparece 'a) b) Texto'.
+        first = re.sub(r"^[a-zA-Z]\)\s*", "", first).strip()
+        parts = [first] if first else []
+        for idx in range(opt_index + 1, next_index):
+            text = lines[idx]["text"]
+            if ANSWER_TEXT_RE.match(text):
+                break
+            if not is_vademecum_noise_line(text):
+                parts.append(text)
+        options.append({"key": chr(ord("a") + pos), "text": normalize_space(" ".join(parts))})
+    return options
+
+
+def parse_vademecum_questions(file_bytes: bytes, filename: str = "vademecum.pdf") -> Dict[str, Any]:
+    lines = extract_pdf_plain_lines(file_bytes)
+    exam_name = os.path.splitext(os.path.basename(filename))[0].strip() or "Vademecum parte general"
+    exam_slug = re.sub(r"[^a-z0-9]+", "-", strip_accents(exam_name.lower())).strip("-")[:60] or "vademecum"
+
+    questions: List[Dict[str, Any]] = []
+    previous_answer_index = 0
+
+    for idx, item in enumerate(lines):
+        answer_match = ANSWER_TEXT_RE.match(item["text"])
+        if not answer_match:
+            continue
+
+        correct = answer_match.group(1).lower()
+        option_indices = find_vademecum_option_group(lines, idx)
+        if not option_indices:
+            previous_answer_index = idx + 1
+            continue
+
+        question_text = clean_vademecum_question_text(lines, previous_answer_index, option_indices[0])
+        options = extract_vademecum_options(lines, option_indices, idx)
+        option_keys = [opt["key"] for opt in options]
+        needs_review = not question_text or len(options) < 2 or correct not in option_keys
+
+        if not question_text or len(options) < 2:
+            previous_answer_index = idx + 1
+            continue
+
+        number = len(questions) + 1
+        q = {
+            "id": f"{exam_slug}-vademecum-general-{number}",
+            "area": "general",
+            "number": number,
+            "reserve": False,
+            "question": question_text,
+            "options": options,
+            "correct": correct if correct in option_keys else None,
+            "needs_review": needs_review,
+            "source_page": int(lines[option_indices[0]].get("page", item.get("page", 0)) or 0),
+            "source_type": "vademecum",
+            "correct_source": "text_answer",
+            "answer_marker": f"RESPUESTA CORRECTA: {correct.upper()}",
+        }
+        questions.append(q)
+        previous_answer_index = idx + 1
+
+    by_area = {
+        "general": sum(1 for item in questions if item["area"] == "general" and not item["reserve"]),
+        "general_reserva": 0,
+        "administrativo": 0,
+        "administrativo_reserva": 0,
+    }
+
+    return {
+        "source": "vademecum_pdf",
+        "exam_name": exam_name,
+        "imported_at": datetime.utcnow().isoformat() + "Z",
+        "questions": questions,
+        "stats": {
+            "total": len(questions),
+            "by_area": by_area,
+            "needs_review": sum(1 for item in questions if item.get("needs_review")),
+        },
+    }
+
 def parse_pdf_questions(file_bytes: bytes, filename: str = "examen.pdf") -> Dict[str, Any]:
+    # Si el PDF trae soluciones escritas como "RESPUESTA CORRECTA: A" usamos
+    # el parser de Vademecum. Si no, usamos el parser oficial por color rojo.
+    plain_lines = extract_pdf_plain_lines(file_bytes)
+    if any(ANSWER_TEXT_RE.match(item["text"]) for item in plain_lines):
+        parsed = parse_vademecum_questions(file_bytes, filename)
+        if parsed.get("questions"):
+            return parsed
+
     lines = extract_pdf_lines(file_bytes)
     exam_name = os.path.splitext(os.path.basename(filename))[0].strip() or "Examen importado"
     exam_slug = re.sub(r"[^a-z0-9]+", "-", strip_accents(exam_name.lower())).strip("-")[:60] or "examen"

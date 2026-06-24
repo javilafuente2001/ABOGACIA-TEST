@@ -377,6 +377,7 @@ function renderSolutions() {
           `).join("")}
         </div>
         ${q.red_scores ? `<details class="red-scores"><summary>Ver lectura interna del rojo</summary><pre>${escapeHtml(JSON.stringify(q.red_scores, null, 2))}</pre></details>` : ""}
+        ${q.correct_source === "text_answer" ? `<details class="red-scores"><summary>Ver lectura de respuesta del Vademecum</summary><pre>${escapeHtml(q.answer_marker || `RESPUESTA CORRECTA: ${(q.correct || "").toUpperCase()}`)}</pre></details>` : ""}
       </article>
     `;
   }).join("");

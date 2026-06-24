@@ -3,6 +3,7 @@
 Aplicación rápida para preparar el examen de acceso a la abogacía:
 
 - Importa PDF oficial con respuestas en rojo.
+- Importa PDFs tipo Vademecum/Colex cuando las soluciones aparecen como `RESPUESTA CORRECTA: A`.
 - Extrae preguntas de parte general y administrativo/contencioso-administrativo.
 - Biblioteca local de exámenes guardados en el navegador.
 - Test por examen concreto, por parte general, por administrativo o mixto.
@@ -11,7 +12,7 @@ Aplicación rápida para preparar el examen de acceso a la abogacía:
 - Test pregunta a pregunta con contador y botón de pausa.
 - Resumen final de aciertos, fallos y sin responder.
 - Pantalla de soluciones para comprobar qué respuesta ha leído la app como correcta en cada examen.
-- Explicación con IA si configuras `OPENAI_API_KEY`.
+- Explicación con IA si configuras `GEMINI_API_KEY` u `OPENAI_API_KEY`.
 - Funciona online: la persona usuaria no instala Python.
 
 ---
@@ -135,7 +136,7 @@ Debe aparecer:
 ## 5. Usar la app
 
 1. Entra en la URL de Render.
-2. Sube el PDF oficial.
+2. Sube el PDF oficial o el PDF tipo Vademecum.
 3. Pulsa **Analizar y guardar**.
 4. Puedes pulsar **Ver soluciones** en cualquier examen guardado para comprobar las respuestas detectadas.
 5. Elige bloque:
@@ -213,9 +214,25 @@ La app prioriza Gemini si existe `GEMINI_API_KEY`. Si no existe, intenta usar Op
 En cada tarjeta de examen guardado aparece el botón **Ver soluciones**. Esa pantalla muestra:
 
 - Pregunta, número y bloque.
-- Respuesta correcta detectada desde el rojo del PDF.
+- Respuesta correcta detectada desde el rojo del PDF oficial o desde el texto `RESPUESTA CORRECTA: X` del Vademecum.
 - Todas las opciones, marcando en azul la correcta.
+- En PDFs oficiales puedes abrir la lectura interna del rojo.
+- En PDFs tipo Vademecum puedes ver la marca literal `RESPUESTA CORRECTA: X`.
 - Filtro por general, administrativo, reservas o preguntas dudosas.
 - Botón para imprimir o guardar el listado como PDF desde el navegador.
 
 Si una pregunta aparece como **Revisar**, no entra en el test normal hasta que se compruebe manualmente.
+
+
+## 9. Importación de Vademecum / Colex
+
+La app no lleva dentro el contenido del libro. Cuando la persona usuaria sube su propio PDF, el servidor lo analiza y guarda en el navegador únicamente las preguntas extraídas.
+
+El parser de Vademecum funciona distinto al de las plantillas oficiales:
+
+```text
+Plantilla oficial: respuesta correcta marcada en rojo.
+Vademecum: respuesta correcta marcada con RESPUESTA CORRECTA: A/B/C/D.
+```
+
+En el Vademecum se importan solo las preguntas tipo test que tienen opciones y marca `RESPUESTA CORRECTA`. Las cuestiones abiertas explicativas se ignoran porque no son compatibles con el test de opciones.
